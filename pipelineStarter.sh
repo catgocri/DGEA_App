@@ -4,7 +4,9 @@ rnaseqOutputDir=$1
 nextflowCommand1=$2
 nextflowCommand2=$3
 
-# Create work directory for temp files.
+# Create work directory for temp files and start ribodetector environment.
+cd
+conda activate ribodetector
 cd $rnaseqOutputDir
 mkdir work
 
@@ -25,6 +27,7 @@ cd fastq_files_for_ribodetector
 echo "<------------------------------------------------------------------------------------------------ Step2"
 
 declare -A seenSamples
+
 
 find . -type f -regex ".*\.fq\.gz" | sort | while read -r file; do
 	#echo $file
