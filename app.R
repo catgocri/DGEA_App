@@ -20,78 +20,121 @@ get_pipeline_data <- function() {
 }
 
 ui <- fluidPage(
+  tags$head(
+    tags$style(HTML("
+      .container-fluid, .row, .col-md-4, .col-md-8 {
+        height: 100%;
+      }
+      .navbar {
+        margin-bottom: 0;
+      }
+      .tab-content {
+        height: calc(100vh - 56px); /* Adjust height for the navbar */
+        overflow-y: auto;
+      }
+      .plot-container {
+        height: calc(100vh - 56px); /* Adjust height for the navbar */
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+      .plot-container .plot {
+        width: 100%;
+        height: 100%;
+      }
+    "))
+  ),
   titlePanel("Pipeline Starter & DGE Analysis"),
-  sidebarLayout(
-    sidebarPanel(
-      tags$style(type='text/css', '#nfcore_command {white-space: pre-wrap; word-break: keep-all;}'),
-      selectInput("terminal", "Select Terminal (For viewing of nextflow processes)", 
-                  choices = list("Default for OS" = "", "cmd (Windows)" = "cmd", "PowerShell (Windows)" = "powershell", 
-                                 "Terminal (macOS)" = "terminal", "iTerm (macOS)" = "iterm", 
-                                 "GNOME Terminal (Linux)" = "gnome-terminal", "xterm (Linux)" = "xterm", 
-                                 "Konsole (Linux)" = "konsole")),
-      shinyDirButton("samples", "Select sample directory...", "Select sample directory for sheetMaker.sh"),
-      verbatimTextOutput("samples", placeholder = T),
-      shinyDirButton("outdir", "Select pipeline output directory...", "Select output directory for pipeline"),
-      verbatimTextOutput("outdir", placeholder = T),
-      fileInput("samplesheet", "Select sample annotations file", accept = ".tsv"),
-      actionButton("load_sheets", "Generate projSheet.csv Data"),
-      actionButton("load_existing_sheets", "Load existing projSheet.csv Data"),
-      actionButton("clear_term", "Clear Log"),
-      textOutput("divider"),
-      verbatimTextOutput("nfcore_command", placeholder = T),
-      selectInput("genome", "Select reference genome for transcript alignment.", choices=list("GRCh37" = "GRCh37", "GRCh38" = "GRCh38")),
-      checkboxInput("save_trimmed", "Save Trimmed", T),
-      checkboxInput("save_non_ribo_reads", "Save Non Ribosomal Reads", T),
-      checkboxInput("remove_ribo_rna", "Remove rRNA (RiboDetector)", T),
-      checkboxInput("save_unaligned", "Save unaligned", T),
-      checkboxInput("skip_gtf_filter", "Skip GTF filter", F),
-      checkboxInput("skip_gtf_transcript_filter", "Skip GTF transcript filter", F),
-      checkboxInput("skip_bbsplit", "Skip BBSplit", F),
-      checkboxInput("skip_umi_extract", "Skip UMI extraction", F),
-      checkboxInput("skip_trimming", "Skip trimming", F),
-      checkboxInput("skip_alignment", "Skip alignment", F),
-      checkboxInput("skip_pseudo_alignment", "Skip pseudo alignment", F),
-      checkboxInput("skip_markduplicates", "Skip MarkDuplicates", F),
-      checkboxInput("skip_bigwig", "Skip bigWig creation", F),
-      checkboxInput("skip_stringtie", "Skip StringTie", F),
-      checkboxInput("skip_fastqc", "Skip FastQC", F),
-      checkboxInput("skip_preseq", "Skip Preseq", F),
-      checkboxInput("skip_dupradar", "Skip dupRadar", F),
-      checkboxInput("skip_qualimap", "Skip Qualimap", F),
-      checkboxInput("skip_rseqc", "Skip RSeQC", F),
-      checkboxInput("skip_biotype_qc", "Skip biotype QC", F),
-      checkboxInput("skip_deseq2_qc", "Skip DESeq2 QC", F),
-      checkboxInput("skip_multiqc", "Skip MultiQC", F),
-      checkboxInput("skip_qc", "Skip all QC except MultiQC", F),
-      actionButton("run_pipeline", "Run nf-core/RNA-Seq Pipeline")
-    ),
-    mainPanel(
-      tabsetPanel(
-        tabPanel("MA Plot", plotOutput("maPlot")),
-        tabPanel("PCA Plot", plotOutput("pcaPlot")),
-        tabPanel("Cook's Distance Plot", plotOutput("cooksPlot")),
-        tabPanel("MDS Plot", plotOutput("mdsPlot")),
-        tabPanel("Volcano Plot", plotOutput("volcanoPlot")),
-        tabPanel("Heatmap Plot", plotOutput("heatmapPlot")),
-        tabPanel("HC Heatmap Plot", plotOutput("hcHeatmapPlot")),
-        tabPanel("Analysis Summary", verbatimTextOutput("summary")),
-        tabPanel("Log Messages", div(style="overflow-y:scroll;", verbatimTextOutput("logging")))
-      ),
-      tabsetPanel(
-        tabPanel("sheetMaker.sh CSV Preview", tableOutput("sheetMakerCsv")),
-        tabPanel("sheetMaker2.sh CSV Preview", tableOutput("sheetMaker2Csv")),
-        tabPanel("Samplesheet TSV Preview", tableOutput("samplesheetTsv")),
-        tabPanel("MultiQC Finder Pre-Alignment", uiOutput("multiqcViewerPre")),
-        tabPanel("MultiQC Finder Post-Alignment", uiOutput("multiqcViewer"))
-      ),
-    )
+  
+  # Define a navbarPage with tab panels
+  navbarPage("Pipeline & Plotting",
+             tabPanel("Pipeline Settings",
+                      sidebarLayout(
+                        sidebarPanel(
+                          tags$style(type='text/css', '#nfcore_command {white-space: pre-wrap; word-break: keep-all;}'),
+                          selectInput("terminal", "Select Terminal (For viewing of nextflow processes)", 
+                                      choices = list("Default for OS" = "", "cmd (Windows)" = "cmd", "PowerShell (Windows)" = "powershell", 
+                                                     "Terminal (macOS)" = "terminal", "iTerm (macOS)" = "iterm", 
+                                                     "GNOME Terminal (Linux)" = "gnome-terminal", "xterm (Linux)" = "xterm", 
+                                                     "Konsole (Linux)" = "konsole")),
+                          shinyDirButton("samples", "Select sample directory...", "Select sample directory for sheetMaker.sh"),
+                          verbatimTextOutput("samples", placeholder = T),
+                          shinyDirButton("outdir", "Select pipeline output directory...", "Select output directory for pipeline"),
+                          verbatimTextOutput("outdir", placeholder = T),
+                          fileInput("samplesheet", "Select sample annotations file", accept = ".tsv"),
+                          actionButton("load_sheets", "Generate projSheet.csv Data"),
+                          actionButton("load_existing_sheets", "Load existing projSheet.csv Data"),
+                          actionButton("clear_term", "Clear Log"),
+                          textOutput("divider"),
+                          verbatimTextOutput("nfcore_command", placeholder = T),
+                          selectInput("genome", "Select reference genome for transcript alignment.", choices=list("GRCh37" = "GRCh37", "GRCh38" = "GRCh38")),
+                          checkboxInput("save_trimmed", "Save Trimmed", T),
+                          checkboxInput("save_non_ribo_reads", "Save Non Ribosomal Reads", T),
+                          checkboxInput("remove_ribo_rna", "Remove rRNA (RiboDetector)", T),
+                          checkboxInput("save_unaligned", "Save unaligned", T),
+                          checkboxInput("skip_gtf_filter", "Skip GTF filter", F),
+                          checkboxInput("skip_gtf_transcript_filter", "Skip GTF transcript filter", F),
+                          checkboxInput("skip_bbsplit", "Skip BBSplit", F),
+                          checkboxInput("skip_umi_extract", "Skip UMI extraction", F),
+                          checkboxInput("skip_trimming", "Skip trimming", F),
+                          checkboxInput("skip_alignment", "Skip alignment", F),
+                          checkboxInput("skip_pseudo_alignment", "Skip pseudo alignment", F),
+                          checkboxInput("skip_markduplicates", "Skip MarkDuplicates", F),
+                          checkboxInput("skip_bigwig", "Skip bigWig creation", F),
+                          checkboxInput("skip_stringtie", "Skip StringTie", F),
+                          checkboxInput("skip_fastqc", "Skip FastQC", F),
+                          checkboxInput("skip_preseq", "Skip Preseq", F),
+                          checkboxInput("skip_dupradar", "Skip dupRadar", F),
+                          checkboxInput("skip_qualimap", "Skip Qualimap", F),
+                          checkboxInput("skip_rseqc", "Skip RSeQC", F),
+                          checkboxInput("skip_biotype_qc", "Skip biotype QC", F),
+                          checkboxInput("skip_deseq2_qc", "Skip DESeq2 QC", F),
+                          checkboxInput("skip_multiqc", "Skip MultiQC", F),
+                          checkboxInput("skip_qc", "Skip all QC except MultiQC", F),
+                          actionButton("run_pipeline", "Run nf-core/RNA-Seq Pipeline"),
+                        ),
+                        mainPanel(
+                          tabsetPanel(
+                            tabPanel("sheetMaker.sh CSV Preview", tableOutput("sheetMakerCsv")),
+                            tabPanel("sheetMaker2.sh CSV Preview", tableOutput("sheetMaker2Csv")),
+                            tabPanel("Samplesheet TSV Preview", tableOutput("samplesheetTsv")),
+                            tabPanel("MultiQC Finder Pre-Alignment", uiOutput("multiqcViewerPre")),
+                            tabPanel("MultiQC Finder Post-Alignment", uiOutput("multiqcViewer")),
+                            tabPanel("Count Data Preview", tableOutput("count_data_pre")),
+                            tabPanel("Log Messages", div(style="overflow-y:scroll;", verbatimTextOutput("logging")))
+                          )
+                        )
+                      )
+             ),
+             tabPanel("Plotting Settings",
+                      sidebarLayout(
+                        sidebarPanel(
+                          actionButton("save_dds", "Save currently loaded DDS object"),
+                          fileInput("load_dds", "Load saved DDS object"),
+                          selectInput("plotType", "Select Plot Type", choices = c("MA Plot", "PCA Plot", "Cook's Distance Plot", "MDS Plot", "Volcano Plot", "HC Heatmap Plot Top 50 DEG's", "HC Heatmap Plot Sample Distances")),
+                        ),
+                        mainPanel(
+                          tabsetPanel(
+                            tabPanel("MA Plot", div(class = "plot-container", plotOutput("maPlot", height = "100%"))),
+                            tabPanel("PCA Plot", div(class = "plot-container", plotOutput("pcaPlot", height = "100%"))),
+                            tabPanel("Cook's Distance Plot", div(class = "plot-container", plotOutput("cooksPlot", height = "100%"))),
+                            tabPanel("MDS Plot", div(class = "plot-container", plotOutput("mdsPlot", height = "100%"))),
+                            tabPanel("Volcano Plot", div(class = "plot-container", plotOutput("volcanoPlot", height = "100%"))),
+                            tabPanel("HC Heatmap Plot Top 50 DEG's", div(class = "plot-container", plotOutput("hcHeatmapPlot", height = "100%"))),
+                            tabPanel("HC Heatmap Plot Sample Distances", div(class = "plot-container", plotOutput("hcHeatmapPlot2", height = "100%"))),
+                            tabPanel("DESeq2 Analysis Summary", verbatimTextOutput("summary"), verbatimTextOutput("resname"), verbatimTextOutput("ddsview"), verbatimTextOutput("vsdview")),
+                          )
+                        )
+                      )
+             )
   )
 )
 
 server <- function(input, output, session) {
   
   # Max input size 30MB
-  options(shiny.maxRequestSize=30*1024^2)
+  options(shiny.maxRequestSize=100000*1024^2)
   
   ### START OF PIPELINE INPUT SELECTION ###
   # Define starting directories for both directory inputs
@@ -100,7 +143,38 @@ server <- function(input, output, session) {
   
   # Where to store the directories
   
-  global <- reactiveValues(samples_dir = NULL, outdir = NULL, sheetMaker_file_dir = NULL, sheetMaker2_file_dir = NULL, nfcore_command_text = NULL)
+  global <- reactiveValues(
+    madeDds = F, 
+    samples_dir = NULL, 
+    outdir = NULL, 
+    sheetMaker_file_dir = NULL, 
+    sheetMaker2_file_dir = NULL, 
+    nfcore_command_text = NULL, 
+    counts_filepath = NULL,
+    dds = NULL,
+    vsd = NULL,
+    result_names = NULL,
+    result_summary = NULL
+  )
+  
+  save_deseq_object <- function(deseq_object) {
+    # Get current UNIX timestamp
+    timestamp <- as.numeric(Sys.time())
+    
+    # Create a unique filename with the timestamp
+    filename <- paste0("deseq_object_", timestamp, ".rds")
+    
+    # Save the DESeq2 object to the file
+    saveRDS(deseq_object, file = file.path(global$outdir, filename))
+    return(filename)
+  }
+  
+  log_messages <- reactiveValues(value = "")
+  append_to_log <- function(input) {
+    log_messages$value <- paste(log_messages$value, paste(input, collapse = "\n"), sep = "\n")
+  }
+  
+  
   
   # Get the directories from the input
   samples <- reactive(input$samples)
@@ -131,8 +205,45 @@ server <- function(input, output, session) {
   observeEvent(input$outdir, {
     if (!"path" %in% names(outdir())) return()
     global$outdir <- file.path("/", paste(unlist(outdir()$path[-1]), collapse = .Platform$file.sep))
+    global$counts_filepath <- paste0(global$outdir, "/star_salmon/salmon.merged.gene_tpm.tsv")
     output$outdir <- renderText({ global$outdir })
   })
+  
+  ### START AUTOMATIC DESEQ ANALYSIS ###
+  observe({
+    req(global$counts_filepath, file.exists(global$counts_filepath), input$samplesheet)
+    if (isFALSE(global$madeDds)) {
+      global$madeDds <- T
+      counts <- read_tsv(global$counts_filepath)
+      
+      # Check for duplicates in gene names
+      if (any(duplicated(counts$gene_name))) {
+        append_to_log("Duplicate gene names found. Using Ensembl IDs as row indices.")
+        counts <- counts %>% 
+          select(-gene_name) %>%
+          column_to_rownames("gene_id")
+      } else {
+        counts <- counts %>% 
+          select(-gene_id) %>%
+          column_to_rownames("gene_name")
+      }
+      
+      counts <- counts %>% 
+        mutate(across(everything(), ~ round(as.numeric(as.character(.)), 0)))
+      
+        append_to_log("Generating DESeqDataSet")
+        #coldata <- samplesheet() %>% column_to_rownames("Delivery_name")
+        dds <- DESeqDataSetFromMatrix(countData = counts, colData = samplesheet(), design = ~ cases)
+        dds <- DESeq(dds)
+        global$dds <- dds
+        global$vsd <- vst(dds, blind=F)
+        global$results <- capture.output(results(dds))
+        global$result_names <- resultsNames(dds)
+        global$result_summary <- capture.output(summary(results(dds)))
+        append_to_log("DESeqDataSet created successfully.")
+    }
+  })
+  ### END AUTOMATIC DESEQ ANALYSIS ###
   ### END OF PIPELINE INPUT SELECTION ###
   
   
@@ -143,13 +254,7 @@ server <- function(input, output, session) {
   
   ### START PIPELINE CODE AND LOGGING FUNCTIONALITY ###
   
-  log_messages <- reactiveValues(value = "")
-  
   temp_log_file <- reactiveVal(NULL)
-  
-  append_to_log <- function(input) {
-    log_messages$value <- paste(log_messages$value, paste(input, collapse = "\n"), sep = "\n")
-  }
   
   run_command <- function(input, temp_file) {
     system(paste(input, "1>", shQuote(temp_file), "2>&1"))
@@ -317,6 +422,38 @@ server <- function(input, output, session) {
     }
   })
   
+  output$summary <- renderText({
+    if (!is.null(global$dds)) {
+      paste(global$result_summary, collapse = "\n")
+    } else {
+      "No DESeqDataSet Found."
+    }
+  })
+  
+  output$resname <- renderText({
+    if (!is.null(global$dds)) {
+      paste(global$result_names, collapse="\n")
+    } else {
+      "No DESeqDataSet Found."
+    }
+  })
+  
+  output$ddsview <- renderText({
+    if (!is.null(global$dds)) {
+      paste(global$results, collapse = "\n")
+    } else {
+      "No DESeqDataSet Found."
+    }
+  })
+  
+  output$vsdview <- renderText({
+    if (!is.null(global$vsd)) {
+      paste(capture.output(global$vsd), collapse = "\n")
+    } else {
+      "No Variance Stabilized DESeqDataSet Found."
+    }
+  })
+  
   output$multiqcViewerPre <- renderUI({
     if (!is.null(global$outdir) && file.exists(file.path(global$outdir, "multiqc/multiqc_report.html"))) {
       tags$div(
@@ -342,6 +479,197 @@ server <- function(input, output, session) {
     }
   })
   
+  ### PLOTS
+  
+  output$maPlot <- renderPlot({
+    req(global$dds)
+    DESeq2::plotMA(global$dds, ylim=c(-30,30), alpha=0.1)
+  })
+  
+  output$pcaPlot <- renderPlot({
+    req(global$vsd)
+    plotPCA(global$vsd, intgroup="cases")
+  })
+  
+  output$cooksPlot <- renderPlot({
+    # Plot config.
+    par(mar=c(5,5,1,1))
+    # Plot cooks distances.
+    boxplot(log10(assays(dds)[["cooks"]]), range=0, las=2)
+  })
+  
+  output$mdsPlot <- renderPlot({
+    req(global$vsd)
+    # Calculate the distance matrix of the variance stabilized data.
+    dist_matrix <- dist(t(assay(global$vsd)))
+    
+    # Perform the MDS in two dimensions..
+    mds <- cmdscale(dist_matrix, eig=T, k=2)
+    
+    # Im calculating percentage of variance explained by each dimensions (MD1 & MDS2)
+    var_explained <- mds$eig / sum(mds$eig) * 100
+    
+    # DF for plot
+    mds_df <- data.frame(
+      MDS1 = mds$points[,1], 
+      MDS2 = mds$points[,2], 
+      group = colData(global$vsd)$cases
+    )
+    
+    # Plot dat DF.
+    ggplot(mds_df, aes(x = MDS1, y = MDS2, color = group)) +
+      geom_point(size = 3) +
+      labs(
+        title = "MDS Plot",
+        x = paste0("Leading logFC dim 1 (", round(var_explained[1], 1), "%)"),
+        y = paste0("Leading logFC dim 2 (", round(var_explained[2], 1), "%)")
+      )
+  })
+  
+  output$volcanoPlot <- renderPlot({
+    req(global$results)
+    EnhancedVolcano(results(global$dds),
+                    lab = rownames(results(global$dds)),
+                    x = 'log2FoldChange',
+                    y = 'pvalue')
+  })
+  
+  output$hcHeatmapPlot2 <- renderPlot({
+    req(global$vsd)
+    dist_matrix_2 <- as.matrix(dist(t(assay(global$vsd))))
+    
+    filtered_value <- "ICU/ECMO"
+    selected_rows <- global$vsd$cases == filtered_value
+    
+    # Filter the distance matrix and cases
+    dist_matrix_subset <- dist_matrix_2[selected_rows, selected_rows]
+    ss <- paste(global$vsd$cases[selected_rows])
+    
+    colors <- colorRampPalette(rev(brewer.pal(9, "Blues")))(255)
+    pheatmap(dist_matrix_subset, 
+             main=paste(filtered_value), 
+             clustering_distance_rows = "euclidean", 
+             clustering_distance_cols = "euclidean", 
+             col = colors, 
+             show_rownames = TRUE,
+             show_colnames = TRUE,
+             fontsize_row = 8,
+             fontsize_col = 8,
+             angle_col = 45,  
+             cellwidth = 15,  
+             cellheight = 10)
+  })
+  
+  output$hcHeatmapPlot <- renderPlot({
+    req(global$vsd)
+    
+    # Debug print to check global$vsd
+    print("Structure of global$vsd:")
+    print(str(global$vsd))
+    
+    filtered_value <- "ICU/ECMO"
+    
+    selected_rows <- global$vsd$cases == filtered_value
+    
+    # Check if selected_rows is logical and contains TRUE values
+    if (!is.logical(selected_rows) || !any(selected_rows)) {
+      stop("No rows selected. Check if 'cases' contains the value 'ICU/ECMO'")
+    }
+    
+    # Get results from DESeq2
+    res <- results(global$dds)
+    
+    # Debug print to check res structure
+    print("Structure of res:")
+    print(str(res))
+    
+    # Ensure res contains 'padj' column
+    if (!"padj" %in% colnames(res)) {
+      stop("res does not contain 'padj' column")
+    }
+    
+    # Order results by adjusted p-value
+    res_ordered <- res[order(res$padj),]
+    
+    # Check if res_ordered is empty
+    if (nrow(res_ordered) == 0) {
+      stop("res_ordered is empty")
+    }
+    
+    # Get top 50 genes
+    top_genes <- head(res_ordered, 50)
+    
+    top_gene_names <- rownames(top_genes)
+    
+    # Extract expression matrix and subset for top genes
+    expression_matrix <- assay(global$vsd)
+    
+    # Debug print to check expression_matrix structure
+    print("Structure of expression_matrix:")
+    print(str(expression_matrix))
+    
+    top_expression_data <- expression_matrix[top_gene_names,]
+    
+    # Check if top_expression_data is empty
+    if (nrow(top_expression_data) == 0) {
+      stop("top_expression_data is empty")
+    }
+    
+    # Subset the expression data for the selected rows
+    expression_data_subset <- top_expression_data[, selected_rows]
+    
+    # Check if expression_data_subset is empty
+    if (ncol(expression_data_subset) == 0) {
+      stop("expression_data_subset is empty")
+    }
+    
+    print("Row names of expression_data_subset:")
+    print(rownames(expression_data_subset))
+    print("Column names of expression_data_subset:")
+    print(colnames(expression_data_subset))
+    
+    gene_names <- rownames(expression_data_subset)
+    
+    # Create color palette
+    colors <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+    
+    # Generate heatmap
+    pheatmap(expression_data_subset, 
+             main = paste("Top 50 DEGs -", filtered_value), 
+             clustering_distance_rows = "euclidean", 
+             clustering_distance_cols = "euclidean", 
+             col = colors, 
+             show_rownames = TRUE,
+             show_colnames = TRUE,
+             fontsize_row = 8,
+             fontsize_col = 8,
+             angle_col = 45,  
+             cellwidth = 15,  
+             cellheight = 10)
+  })
+  
+  observeEvent(input$save_dds, {
+    req(global$dds)
+    req(global$outdir)
+    save_deseq_object(global$dds)
+    showModal(modalDialog("DDS object saved successfully!"))
+  })
+  
+  observeEvent(input$load_dds, {
+    if (file.exists(input$load_dds$datapath)) {
+      # global$madeDds <- T
+      global$dds <- readRDS(input$load_dds$datapath)
+      global$vsd <- vst(global$dds, blind=F)
+      global$results <- capture.output(results(global$dds))
+      global$result_names <- resultsNames(global$dds)
+      global$result_summary <- capture.output(summary(results(global$dds)))
+      append_to_log("DESeqDataSet loaded successfully.")
+      showModal(modalDialog("DDS object loaded successfully!"))
+    } else {
+      append_to_log("Could not load DDS object.")
+    }
+
+  })
 }
 shinyApp(ui, server)
 
