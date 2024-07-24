@@ -10,14 +10,9 @@ library(clipr)
 library(ggfortify)
 library(plotly)
 library(processx)
+library(RColorBrewer)
 library(DT)
-
-# Fetch data from the pipeline
-get_pipeline_data <- function() {
-  samplesheet <- read_tsv("samplesheet_P28103.tsv")
-  counts <- read_delim("P28103_expression_data_2.csv", delim=";") %>% data.frame()
-  list(samplesheet = samplesheet, counts = counts)
-}
+library(grid)
 
 ui <- fluidPage(
   tags$head(
@@ -37,11 +32,11 @@ ui <- fluidPage(
         display: flex;
         align-items: center;
         justify-content: center;
-        overflow: hidden;
+        overflow: auto;
       }
       .plot-container .plot {
-        width: 100%;
-        height: 100%;
+        max-width: 100%;
+        max-height: 100%;
       }
     "))
   ),
@@ -110,21 +105,28 @@ ui <- fluidPage(
              tabPanel("Plotting Settings",
                       sidebarLayout(
                         sidebarPanel(
-                          actionButton("save_dds", "Save currently loaded DDS object"),
                           fileInput("load_dds", "Load saved DDS object"),
-                          selectInput("plotType", "Select Plot Type", choices = c("MA Plot", "PCA Plot", "Cook's Distance Plot", "MDS Plot", "Volcano Plot", "HC Heatmap Plot Top 50 DEG's", "HC Heatmap Plot Sample Distances")),
+                          selectInput("intGroupSelect", "Select Comparison Group", choices = NULL),
+                          selectInput("subGroupSelect", "Select Subgroup", choices = NULL),
+                          sliderInput("plot_width", "Plot Width (px):", min = 100, max = 20000, value = 800),
+                          sliderInput("plot_height", "Plot Height (px):", min = 100, max = 20000, value = 600),
+                          numericInput("pvalue_cutoff", "(Volcano) P-value Cutoff:", value = 0.05, min = 0, max = 0.1, step = 0.0001, width = '200px'),
+                          numericInput("fc_cutoff", "(Volcano) Log2 Fold Change Cutoff:", value = 1, min = 0, max = 20, step = 0.1, width = '200px'),
+                          checkboxInput("full_data", "(Volcano) Show Full Data", value = FALSE),
+                          actionButton("save_dds", "Save currently loaded DDS object"),
                         ),
                         mainPanel(
                           tabsetPanel(
                             tabPanel("MA Plot", div(class = "plot-container", plotOutput("maPlot", height = "100%"))),
-                            tabPanel("PCA Plot", div(class = "plot-container", plotOutput("pcaPlot", height = "100%"))),
+                            tabPanel("PCA Plot", div(class = "plot-container", plotlyOutput("pcaPlot", height = "100%"))),
                             tabPanel("Cook's Distance Plot", div(class = "plot-container", plotOutput("cooksPlot", height = "100%"))),
-                            tabPanel("MDS Plot", div(class = "plot-container", plotOutput("mdsPlot", height = "100%"))),
-                            tabPanel("Volcano Plot", div(class = "plot-container", plotOutput("volcanoPlot", height = "100%"))),
+                            tabPanel("MDS Plot", div(class = "plot-container", plotlyOutput("mdsPlot", height = "100%"))),
+                            tabPanel("Volcano Plot", div(class = "plot-container", plotlyOutput("volcanoPlot", height = "100%"), )),
                             tabPanel("HC Heatmap Plot Top 50 DEG's", div(class = "plot-container", plotOutput("hcHeatmapPlot", height = "100%"))),
                             tabPanel("HC Heatmap Plot Sample Distances", div(class = "plot-container", plotOutput("hcHeatmapPlot2", height = "100%"))),
                             tabPanel("DESeq2 Analysis Summary", verbatimTextOutput("summary"), verbatimTextOutput("resname"), verbatimTextOutput("ddsview"), verbatimTextOutput("vsdview")),
-                          )
+                          ),
+                          DTOutput("plotMeta"),
                         )
                       )
              )
@@ -154,7 +156,10 @@ server <- function(input, output, session) {
     dds = NULL,
     vsd = NULL,
     result_names = NULL,
-    result_summary = NULL
+    result_summary = NULL,
+    hover_metadata = NULL,
+    pca_results = NULL,
+    volcano_df = NULL
   )
   
   save_deseq_object <- function(deseq_object) {
@@ -213,6 +218,7 @@ server <- function(input, output, session) {
   observe({
     req(global$counts_filepath, file.exists(global$counts_filepath), input$samplesheet)
     if (isFALSE(global$madeDds)) {
+      showModal(modalDialog("Count data found, loading count preview and starting DESeq2 analysis. Please wait if the program freezes as this may take a while."))
       global$madeDds <- T
       counts <- read_tsv(global$counts_filepath)
       
@@ -337,6 +343,14 @@ server <- function(input, output, session) {
   output$sheetMakerCsv <- renderTable({
     if (!is.null(global$sheetMaker_file_dir) && file.exists(global$sheetMaker_file_dir)) {
       read.csv(global$sheetMaker_file_dir)
+    } else {
+      data.frame("N/A")
+    }
+  })
+  
+  output$count_data_pre <- renderTable({
+    if (!is.null(global$counts_filepath) && file.exists(global$counts_filepath)) {
+      read_tsv(global$counts_filepath)
     } else {
       data.frame("N/A")
     }
@@ -481,159 +495,390 @@ server <- function(input, output, session) {
   
   ### PLOTS
   
+  plotWidth <- reactive({
+    input$plot_width
+  })
+  
+  plotHeight <- reactive({
+    input$plot_height
+  })
+  
   output$maPlot <- renderPlot({
     req(global$dds)
     DESeq2::plotMA(global$dds, ylim=c(-30,30), alpha=0.1)
+  }, width = plotWidth, height = plotHeight)
+  # 
+  output$pcaPlot <- renderPlotly({
+    req(global$vsd, input$intGroupSelect, input$subGroupSelect)
+    
+    # Perform PCA using DESeq2 function
+    pca_results <- plotPCA(global$vsd, intgroup = input$intGroupSelect, returnData = TRUE)
+    
+    # Add Delivery_name column to pca_results if not present
+    pca_results$Delivery_name <- rownames(pca_results)
+    
+    # Store PCA results in reactive values
+    global$pca_results <- pca_results
+    
+    # Create interactive PCA plot with Plotly
+    p <- plot_ly(pca_results, x = ~PC1, y = ~PC2, color = ~get(input$intGroupSelect),
+                 type = 'scatter', mode = 'markers',
+                 marker = list(size = 10),
+                 source = "pca_plot",
+                 text = ~paste('Sample:', Delivery_name, '<br>',
+                               'PC1:', round(PC1, 2), '<br>',
+                               'PC2:', round(PC2, 2)), # Add more metadata as needed
+                 hoverinfo = 'text') %>%
+      layout(title = 'PCA Plot',
+             xaxis = list(title = 'PC1'),
+             yaxis = list(title = 'PC2'))
+    p <- event_register(p, "plotly_selected")
+    p
   })
   
-  output$pcaPlot <- renderPlot({
-    req(global$vsd)
-    plotPCA(global$vsd, intgroup="cases")
+  # Handle the selection (brushing) in the PCA Plotly plot
+  observeEvent(event_data("plotly_selected", source = "pca_plot"), {
+    selected_points <- event_data("plotly_selected", source = "pca_plot")
+    
+    # Debugging: Print selected points to console
+    print("Selected Points Data:")
+    print(selected_points)
+    
+    if (!is.null(selected_points) && length(selected_points$pointNumber) > 0) {
+      # Extract indices of selected points
+      selected_indices <- selected_points$curveNumber
+      
+      # Debugging: Print indices to console
+      print("Selected Indices:")
+      print(selected_indices)
+      
+      # Check if indices are valid
+      if (all(selected_indices >= 0 & selected_indices < nrow(global$pca_results))) {
+        # Map indices to PCA results
+        selected_pca_data <- global$pca_results[selected_indices + 1, ]
+        
+        # Debugging: Print selected PCA data to console
+        print("Selected PCA Data:")
+        print(selected_pca_data)
+        
+        # Extract Delivery_name for metadata lookup
+        selected_names <- selected_pca_data$Delivery_name
+        print("Selected Names Data:")
+        print(selected_names)
+        
+        # Retrieve metadata from colData
+        metadata <- as.data.frame(colData(global$dds))
+        
+        # Debugging: Print metadata to console
+        print("Metadata Data:")
+        print(metadata)
+        
+        # Ensure rownames of metadata match Delivery_name
+        rownames(metadata) <- metadata$Delivery_name
+        selected_metadata <- metadata[rownames(metadata) %in% selected_names, ]
+        
+        # Debugging: Print selected metadata to console
+        print("Selected Metadata:")
+        print(selected_metadata)
+        
+        # Display the selected metadata in the table
+        output$plotMeta <- renderDT({
+          datatable(selected_metadata)
+        })
+      } else {
+        # Handle case when indices are out of bounds
+        output$plotMeta <- renderDT({
+          datatable(data.frame())
+        })
+      }
+    } else {
+      # Handle case when no points are selected
+      output$plotMeta <- renderDT({
+        datatable(data.frame())
+      })
+    }
   })
   
   output$cooksPlot <- renderPlot({
+    req(global$dds)
     # Plot config.
     par(mar=c(5,5,1,1))
     # Plot cooks distances.
-    boxplot(log10(assays(dds)[["cooks"]]), range=0, las=2)
-  })
+    boxplot(log10(assays(global$dds)[["cooks"]]), range=0, las=2)
+  }, width = plotWidth, height = plotHeight)
   
-  output$mdsPlot <- renderPlot({
-    req(global$vsd)
-    # Calculate the distance matrix of the variance stabilized data.
+  output$mdsPlot <- renderPlotly({
+    req(global$vsd, input$intGroupSelect, input$subGroupSelect)
+    
+    # Perform MDS
     dist_matrix <- dist(t(assay(global$vsd)))
-    
-    # Perform the MDS in two dimensions..
-    mds <- cmdscale(dist_matrix, eig=T, k=2)
-    
-    # Im calculating percentage of variance explained by each dimensions (MD1 & MDS2)
-    var_explained <- mds$eig / sum(mds$eig) * 100
-    
-    # DF for plot
+    mds_data <- cmdscale(dist_matrix, eig=T, k = 2)
     mds_df <- data.frame(
-      MDS1 = mds$points[,1], 
-      MDS2 = mds$points[,2], 
-      group = colData(global$vsd)$cases
+      MDS1 = mds_data$points[,1], 
+      MDS2 = mds_data$points[,2], 
+      group = colData(global$vsd)[[input$intGroupSelect]],
+      Delivery_name = rownames(colData(global$vsd)) # Add Delivery_name column
     )
     
-    # Plot dat DF.
-    ggplot(mds_df, aes(x = MDS1, y = MDS2, color = group)) +
-      geom_point(size = 3) +
-      labs(
-        title = "MDS Plot",
-        x = paste0("Leading logFC dim 1 (", round(var_explained[1], 1), "%)"),
-        y = paste0("Leading logFC dim 2 (", round(var_explained[2], 1), "%)")
-      )
+    # Store MDS results in reactive values
+    global$mds_results <- mds_df
+    
+    # Create interactive MDS plot with Plotly
+    p <- plot_ly(mds_df, x = ~MDS1, y = ~MDS2, color = ~group,
+                 type = 'scatter', mode = 'markers',
+                 marker = list(size = 10),
+                 text = ~paste('Sample:', Delivery_name, '<br>',
+                               'MDS1:', round(MDS1, 2), '<br>',
+                               'MDS2:', round(MDS2, 2)), # Add more metadata as needed
+                 hoverinfo = 'text',
+                 source = "mds_plot") %>%
+      layout(title = 'MDS Plot',
+             xaxis = list(title = 'Dimension 1'),
+             yaxis = list(title = 'Dimension 2'))
+    p <- event_register(p, "plotly_selected")
+    p
   })
   
-  output$volcanoPlot <- renderPlot({
+  observeEvent(event_data("plotly_selected", source = "mds_plot"), {
+    selected_points <- event_data("plotly_selected", source = "mds_plot")
+    
+    # Debugging: Print selected points to console
+    print("Selected Points Data:")
+    print(selected_points)
+    
+    if (!is.null(selected_points) && length(selected_points$pointNumber) > 0) {
+      # Extract indices of selected points
+      selected_indices <- selected_points$curveNumber
+      
+      # Debugging: Print indices to console
+      print("Selected Indices:")
+      print(selected_indices)
+      
+      # Check if indices are valid
+      if (all(selected_indices >= 0 & selected_indices < nrow(global$mds_results))) {
+        # Map indices to MDS results
+        selected_mds_data <- global$mds_results[selected_indices + 1, ]
+        
+        # Debugging: Print selected MDS data to console
+        print("Selected MDS Data:")
+        print(selected_mds_data)
+        
+        # Extract Delivery_name for metadata lookup
+        selected_names <- selected_mds_data$Delivery_name
+        print("Selected Names Data:")
+        print(selected_names)
+        
+        # Retrieve metadata from colData
+        metadata <- as.data.frame(colData(global$dds))
+        
+        # Debugging: Print metadata to console
+        print("Metadata Data:")
+        print(metadata)
+        
+        # Ensure rownames of metadata match Delivery_name
+        rownames(metadata) <- metadata$Delivery_name
+        selected_metadata <- metadata[rownames(metadata) %in% selected_names, ]
+        
+        # Debugging: Print selected metadata to console
+        print("Selected Metadata:")
+        print(selected_metadata)
+        
+        # Display the selected metadata in the table
+        output$plotMeta <- renderDT({
+          datatable(selected_metadata)
+        })
+      } else {
+        # Handle case when indices are out of bounds
+        output$plotMeta <- renderDT({
+          datatable(data.frame())
+        })
+      }
+    } else {
+      # Handle case when no points are selected
+      output$plotMeta <- renderDT({
+        datatable(data.frame())
+      })
+    }
+  })
+  
+  output$volcanoPlot <- renderPlotly({
     req(global$results)
-    EnhancedVolcano(results(global$dds),
-                    lab = rownames(results(global$dds)),
-                    x = 'log2FoldChange',
-                    y = 'pvalue')
+    
+    # Define color palette
+    cb_palette <- brewer.pal(n = 4, name = "Dark2")
+    
+    # Get results
+    res <- results(global$dds)
+    
+    # Create data frame for plotting
+    df <- as.data.frame(res)
+    df$gene <- rownames(df)
+    
+    # Classify genes based on input cutoffs
+    df$Significance <- with(df, ifelse(pvalue < input$pvalue_cutoff & abs(log2FoldChange) > input$fc_cutoff, "Log2FC & pvalue",
+                                       ifelse(pvalue < input$pvalue_cutoff, "pvalue",
+                                              ifelse(abs(log2FoldChange) > input$fc_cutoff, "Log2FC", "Non-significant"))))
+    
+    # Separate significant and non-significant points
+    significant_points <- df[df$Significance %in% c("Log2FC & pvalue", "pvalue", "Log2FC"), ]
+    non_significant_points <- df[df$Significance == "Non-significant", ]
+    
+    # Downsample non-significant points if full data checkbox is not selected
+    if (!input$full_data) {
+      set.seed(123)
+      non_significant_points <- non_significant_points[sample(nrow(non_significant_points), min(5000, nrow(non_significant_points))), ]
+    }
+    
+    # Combine significant and sampled non-significant points
+    df <- rbind(significant_points, non_significant_points)
+    
+    # Store df in a reactive value for use in observeEvent
+    global$volcano_df <- df
+    
+    # Create volcano plot
+    p <- plot_ly(data = df, x = ~log2FoldChange, y = ~-log10(pvalue), text = ~paste("Gene:", gene), customdata = ~gene, 
+                 color = ~Significance, colors = cb_palette, type = 'scattergl', mode = 'markers',
+                 marker = list(size = 5, opacity = 0.7, line = list(width = 0.5, color = 'black')),
+                 source = "volcano_plot") %>%
+      layout(
+        title = "Volcano Plot",
+        xaxis = list(title = "log2 Fold Change"),
+        yaxis = list(title = "-log10 p-value"),
+        showlegend = TRUE
+      )
+    
+    p <- event_register(p, "plotly_selected")
+    p
   })
   
-  output$hcHeatmapPlot2 <- renderPlot({
-    req(global$vsd)
+  observeEvent(event_data("plotly_selected", source = "volcano_plot"), {
+    selected_points <- event_data("plotly_selected", source = "volcano_plot")
+    
+    # Debugging: Print selected points to console
+    print("Selected Points Data:")
+    print(selected_points)
+    
+    if (!is.null(selected_points) && length(selected_points$pointNumber) > 0) {
+      # Extract genes of selected points
+      selected_indices <- selected_points$pointNumber
+      selected_genes <- selected_points$customdata
+      
+      # Debugging: Print indices to console
+      print("Selected Genes:")
+      print(selected_genes)
+      
+      # Access the stored df from global variables
+      df <- global$volcano_df
+      
+      # Check if indices are valid
+      if (all(selected_indices >= 0 & selected_indices < nrow(df))) {
+        # Map indices to volcano plot results
+        selected_volcano_data <- df[selected_genes, ] 
+        
+        # Debugging: Print selected volcano data to console
+        print("Selected Volcano Data:")
+        print(selected_volcano_data)
+        
+        # Display the selected metadata in the table
+        output$plotMeta <- renderDT({
+          datatable(selected_volcano_data)
+        })
+      } else {
+        # Handle case when indices are out of bounds
+        output$plotMeta <- renderDT({
+          datatable(data.frame())
+        })
+      }
+    } else {
+      # Handle case when no points are selected
+      output$plotMeta <- renderDT({
+        datatable(data.frame())
+      })
+    }
+  })
+  
+  hcHeatmapPlot2 <- reactive({
+    req(global$vsd, input$intGroupSelect)  # Ensure global$vsd and input$intGroupSelect are available
+    
+    # Extract the comparison group from colData
+    comparisonGroup <- colData(global$vsd)[[input$intGroupSelect]]
+    
+    # Filter data based on selected subgroup
+    filtered_value <- input$subGroupSelect
+    selected_rows <- comparisonGroup == filtered_value
+    
+    # Check if there are selected rows
+    if (!any(selected_rows)) {
+      stop("No rows selected. Check if 'cases' contains the value.")
+    }
+    
+    # Calculate distance matrix and subset
     dist_matrix_2 <- as.matrix(dist(t(assay(global$vsd))))
-    
-    filtered_value <- "ICU/ECMO"
-    selected_rows <- global$vsd$cases == filtered_value
-    
-    # Filter the distance matrix and cases
     dist_matrix_subset <- dist_matrix_2[selected_rows, selected_rows]
-    ss <- paste(global$vsd$cases[selected_rows])
-    
-    colors <- colorRampPalette(rev(brewer.pal(9, "Blues")))(255)
+
+    # Create heatmap
     pheatmap(dist_matrix_subset, 
-             main=paste(filtered_value), 
+             main = paste(filtered_value), 
              clustering_distance_rows = "euclidean", 
              clustering_distance_cols = "euclidean", 
-             col = colors, 
+             col = colorRampPalette(rev(brewer.pal(9, "Blues")))(255), 
              show_rownames = TRUE,
              show_colnames = TRUE,
              fontsize_row = 8,
              fontsize_col = 8,
+             width = plotWidth,
+             height = plotHeight,
              angle_col = 45,  
              cellwidth = 15,  
              cellheight = 10)
   })
   
-  output$hcHeatmapPlot <- renderPlot({
-    req(global$vsd)
+  # Reactive expression for heatmap of top 50 DEGs
+  hcHeatmapPlot <- reactive({
+    req(global$vsd, input$intGroupSelect)  # Ensure global$vsd and input$intGroupSelect are available
     
-    # Debug print to check global$vsd
-    print("Structure of global$vsd:")
-    print(str(global$vsd))
+    # Extract the comparison group from colData
+    comparisonGroup <- colData(global$vsd)[[input$intGroupSelect]]
     
-    filtered_value <- "ICU/ECMO"
+    # Filter data based on selected subgroup
+    filtered_value <- input$subGroupSelect
+    selected_rows <- comparisonGroup == filtered_value
     
-    selected_rows <- global$vsd$cases == filtered_value
-    
-    # Check if selected_rows is logical and contains TRUE values
-    if (!is.logical(selected_rows) || !any(selected_rows)) {
-      stop("No rows selected. Check if 'cases' contains the value 'ICU/ECMO'")
+    # Check if there are selected rows
+    if (!any(selected_rows)) {
+      stop("No rows selected. Check if 'cases' contains the value.")
     }
     
     # Get results from DESeq2
     res <- results(global$dds)
-    
-    # Debug print to check res structure
-    print("Structure of res:")
-    print(str(res))
     
     # Ensure res contains 'padj' column
     if (!"padj" %in% colnames(res)) {
       stop("res does not contain 'padj' column")
     }
     
-    # Order results by adjusted p-value
+    # Order results by adjusted p-value and get top 50 genes
     res_ordered <- res[order(res$padj),]
-    
-    # Check if res_ordered is empty
-    if (nrow(res_ordered) == 0) {
-      stop("res_ordered is empty")
-    }
-    
-    # Get top 50 genes
     top_genes <- head(res_ordered, 50)
     
     top_gene_names <- rownames(top_genes)
     
     # Extract expression matrix and subset for top genes
     expression_matrix <- assay(global$vsd)
-    
-    # Debug print to check expression_matrix structure
-    print("Structure of expression_matrix:")
-    print(str(expression_matrix))
-    
     top_expression_data <- expression_matrix[top_gene_names,]
     
-    # Check if top_expression_data is empty
-    if (nrow(top_expression_data) == 0) {
-      stop("top_expression_data is empty")
-    }
-    
-    # Subset the expression data for the selected rows
+    # Subset expression data for the selected rows
     expression_data_subset <- top_expression_data[, selected_rows]
     
-    # Check if expression_data_subset is empty
-    if (ncol(expression_data_subset) == 0) {
-      stop("expression_data_subset is empty")
-    }
-    
-    print("Row names of expression_data_subset:")
-    print(rownames(expression_data_subset))
-    print("Column names of expression_data_subset:")
-    print(colnames(expression_data_subset))
-    
-    gene_names <- rownames(expression_data_subset)
-    
-    # Create color palette
     colors <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
     
-    # Generate heatmap
+    # Check for unique breaks in color scale
+    range_values <- range(expression_data_subset, na.rm = TRUE)
+    if (length(unique(expression_data_subset)) <= 1) {
+      stop("Data for heatmap contains insufficient unique values")
+    }
+    
+    # Create heatmap
     pheatmap(expression_data_subset, 
              main = paste("Top 50 DEGs -", filtered_value), 
              clustering_distance_rows = "euclidean", 
@@ -648,6 +893,15 @@ server <- function(input, output, session) {
              cellheight = 10)
   })
   
+  output$hcHeatmapPlot2 <- renderPlot({
+    hcHeatmapPlot2()
+  })
+  
+  # Render heatmap of top 50 DEGs
+  output$hcHeatmapPlot <- renderPlot({
+    hcHeatmapPlot()
+  })
+  
   observeEvent(input$save_dds, {
     req(global$dds)
     req(global$outdir)
@@ -657,7 +911,7 @@ server <- function(input, output, session) {
   
   observeEvent(input$load_dds, {
     if (file.exists(input$load_dds$datapath)) {
-      # global$madeDds <- T
+      global$madeDds <- T
       global$dds <- readRDS(input$load_dds$datapath)
       global$vsd <- vst(global$dds, blind=F)
       global$results <- capture.output(results(global$dds))
@@ -669,6 +923,34 @@ server <- function(input, output, session) {
       append_to_log("Could not load DDS object.")
     }
 
+  })
+  
+  observe({
+    req(global$dds)  # Ensure global$dds is available
+    
+    # Extract column names from colData(global$dds)
+    comparisonGroups <- colnames(colData(global$dds))
+    
+    # Update the selectInput choices based on the column names
+    updateSelectInput(session, "intGroupSelect", 
+                      choices = comparisonGroups)
+  })
+  
+  subgroups <- reactive({
+    req(input$intGroupSelect, global$dds)  # Ensure input$intGroupSelect and global$dds are available
+    
+    selectedGroup <- input$intGroupSelect
+    colData(global$dds)[[selectedGroup]]
+  })
+  
+  observe({
+    req(subgroups())  # Ensure subgroups() is available
+    
+    # Get unique values for the subgroups
+    uniqueSubgroups <- unique(subgroups())
+    
+    updateSelectInput(session, "subGroupSelect", 
+                      choices = uniqueSubgroups)
   })
 }
 shinyApp(ui, server)
