@@ -1,0 +1,41 @@
+```{r}
+library(DESeq2)
+library(EnhancedVolcano)
+library(readr)
+
+# Read the data
+counts <- read.csv(file = "/media/baseripper/Data3/P28103_Kuzey_run2/star_salmon/salmon.merged.gene_tpm.tsv", sep = "\t")
+metadata <- read_tsv("/media/baseripper/Data3/P28103_Kuzey/sample_annotation_P28103.tsv")
+
+rownames(counts) <- counts$gene_id
+counts$gene_id <- NULL
+counts$gene_name <- NULL
+
+counts$P28103_126_S6_L003 <- NULL
+metadata <- subset(metadata, sample != "P28103_126_S6_L003")
+
+counts$P28103_201_S129_L004 <- NULL
+metadata <- subset(metadata, sample != "P28103_201_S129_L004")
+
+
+counts$P28103_201_S200_L003 <- NULL
+metadata <- subset(metadata, sample != "P28103_201_S200_L003")
+
+View(counts)
+
+# Create DESeq2 dataset
+dds <- DESeqDataSetFromMatrix(countData = counts, colData = metadata, design = ~cases)
+dds <- DESeq(dds)
+res <- results(dds)
+
+```
+
+```{r}
+# Ensure the labels are correctly set
+EnhancedVolcano(res,
+                lab = rownames(res),
+                x = 'log2FoldChange',
+                y = 'pvalue')
+
+```
+

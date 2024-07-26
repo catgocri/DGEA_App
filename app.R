@@ -17,6 +17,16 @@ library(grid)
 ui <- fluidPage(
   tags$head(
     tags$style(HTML("
+      .sidebar {
+        position: fixed;
+        width: 300px;
+        height: 100%;
+        overflow-y: auto;
+      }
+      .main {
+        margin-left: 320px;
+        overflow-y: auto;
+      }
       .container-fluid, .row, .col-md-4, .col-md-8 {
         height: 100%;
       }
@@ -48,6 +58,7 @@ ui <- fluidPage(
                       sidebarLayout(
                         sidebarPanel(
                           tags$style(type='text/css', '#nfcore_command {white-space: pre-wrap; word-break: keep-all;}'),
+                          checkboxInput("autoDdsToggle", "Do Auto DESeq2 Object Creation", value = TRUE),
                           selectInput("terminal", "Select Terminal (For viewing of nextflow processes)", 
                                       choices = list("Default for OS" = "", "cmd (Windows)" = "cmd", "PowerShell (Windows)" = "powershell", 
                                                      "Terminal (macOS)" = "terminal", "iTerm (macOS)" = "iterm", 
@@ -93,19 +104,34 @@ ui <- fluidPage(
                           tabsetPanel(
                             tabPanel("sheetMaker.sh CSV Preview", tableOutput("sheetMakerCsv")),
                             tabPanel("sheetMaker2.sh CSV Preview", tableOutput("sheetMaker2Csv")),
-                            tabPanel("Samplesheet TSV Preview", tableOutput("samplesheetTsv")),
+                            tabPanel("Samplesheet TSV Preview", tableOutput("samplesheetTsv2")),
                             tabPanel("MultiQC Finder Pre-Alignment", uiOutput("multiqcViewerPre")),
                             tabPanel("MultiQC Finder Post-Alignment", uiOutput("multiqcViewer")),
-                            tabPanel("Count Data Preview", tableOutput("count_data_pre")),
                             tabPanel("Log Messages", div(style="overflow-y:scroll;", verbatimTextOutput("logging")))
                           )
                         )
                       )
              ),
+             tabPanel("Sample Exclusion & DESeq2 Settings", 
+                      sidebarLayout(
+                        sidebarPanel(
+                          fileInput("counts_input", "Manually input count data", accept = ".tsv"),
+                          selectInput("design_input", "Select DESeq2 Design Formula:", choices = NULL),
+                          checkboxGroupInput("excluded_values", "Select excluded values:", choices = NULL),
+                          actionButton("exclude", "Exclude"),
+                          actionButton("manualDESeq2", "Manually start DESeq2 analysis")
+                        ),
+                        mainPanel(
+                          tabsetPanel(
+                            tabPanel("Samplesheet TSV Preview", DTOutput("samplesheetTsv")),
+                            tabPanel("Count Data Preview", DTOutput("count_data_pre"))
+                          )
+                        )
+                      )),
              tabPanel("Plotting Settings",
                       sidebarLayout(
                         sidebarPanel(
-                          fileInput("load_dds", "Load saved DDS object"),
+                          fileInput("load_dds", "Load saved DDS object", accept = ".rds"),
                           selectInput("intGroupSelect", "Select Comparison Group", choices = NULL),
                           selectInput("subGroupSelect", "Select Subgroup", choices = NULL),
                           sliderInput("plot_width", "Plot Width (px):", min = 100, max = 20000, value = 800),
@@ -147,19 +173,24 @@ server <- function(input, output, session) {
   
   global <- reactiveValues(
     madeDds = F, 
+    doAutoDDS = T,
     samples_dir = NULL, 
     outdir = NULL, 
     sheetMaker_file_dir = NULL, 
     sheetMaker2_file_dir = NULL, 
     nfcore_command_text = NULL, 
     counts_filepath = NULL,
+    counts_data = NULL,
+    annotations = NULL,
     dds = NULL,
     vsd = NULL,
     result_names = NULL,
     result_summary = NULL,
     hover_metadata = NULL,
     pca_results = NULL,
-    volcano_df = NULL
+    volcano_df = NULL,
+    design_variable = NULL,
+    metadata_new = NULL,
   )
   
   save_deseq_object <- function(deseq_object) {
@@ -189,6 +220,10 @@ server <- function(input, output, session) {
     read_tsv(file = input$samplesheet$datapath)
   })
   
+  observeEvent(input$autoDdsToggle, {
+    global$doAutoDds <- input$autoDdsToggle
+  })
+  
   # What to do with the output
   output$samples <- renderText({
     global$samples_dir
@@ -212,10 +247,58 @@ server <- function(input, output, session) {
     output$outdir <- renderText({ global$outdir })
   })
   
+  
+  perform_DESeq2 <- function() {
+    req(global$counts_data, global$metadata_new)
+    showModal(modalDialog("Performing DESeq2 analysis."))
+    append_to_log("Generating DESeqDataSet")
+    #coldata <- samplesheet() %>% column_to_rownames("Delivery_name")
+    counts <- global$counts_data
+    
+    # Check for duplicates in gene names
+    if (any(duplicated(counts$gene_name))) {
+      append_to_log("Duplicate gene names found. Using Ensembl IDs as row indices.")
+      counts <- counts %>% 
+        select(-gene_name) %>%
+        column_to_rownames("gene_id")
+    } else {
+      counts <- counts %>% 
+        select(-gene_id) %>%
+        column_to_rownames("gene_name")
+    }
+    
+    
+    counts <- counts %>% 
+      mutate(across(everything(), ~ round(as.numeric(as.character(.)), 0)))
+    
+    design_formula <- as.formula(paste("~", global$design_variable))
+    if (!is.null(global$metadata_new)) {
+      dds <- DESeqDataSetFromMatrix(countData = counts, colData = global$metadata_new, design = design_formula)
+    } else {
+      dds <- DESeqDataSetFromMatrix(countData = counts, colData = samplesheet(), design = design_formula)
+    }
+    dds <- DESeq(dds)
+    global$dds <- dds
+    global$vsd <- vst(dds, blind=F)
+    global$results <- capture.output(results(dds))
+    global$result_names <- resultsNames(dds)
+    global$result_summary <- capture.output(summary(results(dds)))
+    append_to_log("DESeqDataSet created successfully.")
+  } 
+  
+  observeEvent(input$manualDESeq2, {
+    req(global$counts_data, samplesheet())
+    perform_DESeq2()
+  })
+  
+  observeEvent(input$design_input, {
+    global$design_variable <- input$design_input
+  })
+  
   ### START AUTOMATIC DESEQ ANALYSIS ###
   observe({
     req(global$counts_filepath, file.exists(global$counts_filepath), input$samplesheet)
-    if (isFALSE(global$madeDds)) {
+    if (isFALSE(global$madeDds) && isTRUE(global$doAutoDds)) {
       showModal(modalDialog("Count data found, loading count preview and starting DESeq2 analysis. Please wait if the program freezes as this may take a while."))
       global$madeDds <- T
       counts <- read_tsv(global$counts_filepath)
@@ -235,16 +318,35 @@ server <- function(input, output, session) {
       counts <- counts %>% 
         mutate(across(everything(), ~ round(as.numeric(as.character(.)), 0)))
       
-        append_to_log("Generating DESeqDataSet")
-        #coldata <- samplesheet() %>% column_to_rownames("Delivery_name")
-        dds <- DESeqDataSetFromMatrix(countData = counts, colData = samplesheet(), design = ~ cases)
-        dds <- DESeq(dds)
-        global$dds <- dds
-        global$vsd <- vst(dds, blind=F)
-        global$results <- capture.output(results(dds))
-        global$result_names <- resultsNames(dds)
-        global$result_summary <- capture.output(summary(results(dds)))
-        append_to_log("DESeqDataSet created successfully.")
+      append_to_log("Generating DESeqDataSet")
+      global$counts_data <- counts
+      #coldata <- samplesheet() %>% column_to_rownames("Delivery_name")
+      dds <- DESeqDataSetFromMatrix(countData = counts, colData = samplesheet(), design = ~ cases)
+      dds <- DESeq(dds)
+      global$dds <- dds
+      global$vsd <- vst(dds, blind=F)
+      global$results <- capture.output(results(dds))
+      global$result_names <- resultsNames(dds)
+      global$result_summary <- capture.output(summary(results(dds)))
+      append_to_log("DESeqDataSet created successfully.")
+    } else if (isFALSE(global$doAutoDds) && is.null(global$counts_data)) {
+      showModal(modalDialog("Count data found, loading count preview and count data, not performing DESeq2. Please wait if the program freezes as this may take a while."))
+      counts <- read_tsv(global$counts_filepath)
+      if (any(duplicated(counts$gene_name))) {
+        append_to_log("Duplicate gene names found. Using Ensembl IDs as row indices.")
+        counts <- counts %>% 
+          select(-gene_name) %>%
+          column_to_rownames("gene_id")
+      } else {
+        counts <- counts %>% 
+          select(-gene_id) %>%
+          column_to_rownames("gene_name")
+      }
+      
+      counts <- counts %>% 
+        mutate(across(everything(), ~ round(as.numeric(as.character(.)), 0)))
+      
+      global$counts_data <- counts
     }
   })
   ### END AUTOMATIC DESEQ ANALYSIS ###
@@ -266,7 +368,7 @@ server <- function(input, output, session) {
   
   observeEvent(input$load_sheets, {
     if (!is.null(global$samples_dir) && !is.null(global$outdir)) {
-
+      
       command <- paste0("./sheetMaker.sh ", global$samples_dir, " DGEA_projSheet ", global$outdir)
       
       # Create a temporary file to store the output
@@ -285,7 +387,7 @@ server <- function(input, output, session) {
       }
       
       global$sheetMaker_file_dir <- file.path(global$outdir, "sheetMaker", "DGEA_projSheet.csv")
-
+      
       if (file.exists(global$sheetMaker_file_dir)) {
         append_to_log("Read sheetMaker csv file.")
       }
@@ -337,7 +439,7 @@ server <- function(input, output, session) {
   })
   
   output$logging <- renderText({log_messages$value})
-    
+  
   output$sheetMakerCsv <- renderTable({
     if (!is.null(global$sheetMaker_file_dir) && file.exists(global$sheetMaker_file_dir)) {
       read.csv(global$sheetMaker_file_dir)
@@ -346,9 +448,9 @@ server <- function(input, output, session) {
     }
   })
   
-  output$count_data_pre <- renderTable({
-    if (!is.null(global$counts_filepath) && file.exists(global$counts_filepath)) {
-      read_tsv(global$counts_filepath)
+  output$count_data_pre <- renderDataTable({
+    if (!is.null(global$counts_data) && file.exists(global$counts_filepath)) {
+      read_tsv(global$counts_data$datapath)
     } else {
       data.frame("N/A")
     }
@@ -364,9 +466,18 @@ server <- function(input, output, session) {
   
   observeEvent(input$samplesheet, {
     append_to_log("Sample annotations uploaded successfully.")
+    global$metadata_new <- samplesheet()
   })
   
-  output$samplesheetTsv <- renderTable({
+  output$samplesheetTsv <- renderDataTable({
+    if (!is.null(global$metadata_new)) {
+      global$metadata_new
+    } else {
+      data.frame("N/A")
+    }
+  })
+  
+  output$samplesheetTsv2 <- renderTable({
     if (!is.null(input$samplesheet)) {
       samplesheet()
     } else {
@@ -512,7 +623,7 @@ server <- function(input, output, session) {
     pca_results <- plotPCA(global$vsd, intgroup = input$intGroupSelect, returnData = TRUE)
     
     # Add Delivery_name column to pca_results if not present
-    pca_results$Delivery_name <- rownames(pca_results)
+    pca_results$sample <- rownames(pca_results)
     
     global$pca_results <- pca_results
     
@@ -520,8 +631,8 @@ server <- function(input, output, session) {
                  type = 'scatter', mode = 'markers',
                  marker = list(size = 10),
                  source = "pca_plot",
-                 customdata = ~Delivery_name, 
-                 text = ~paste('Sample:', Delivery_name, '<br>',
+                 customdata = ~sample, 
+                 text = ~paste('Sample:', sample, '<br>',
                                'PC1:', round(PC1, 2), '<br>',
                                'PC2:', round(PC2, 2)),
                  hoverinfo = 'text') %>%
@@ -558,7 +669,7 @@ server <- function(input, output, session) {
         print(selected_pca_data)
         
         # Extract Delivery_name for metadata lookup
-        selected_names <- selected_pca_data$Delivery_name
+        selected_names <- selected_pca_data$sample
         print("Selected Names Data:")
         print(selected_names)
         
@@ -570,7 +681,7 @@ server <- function(input, output, session) {
         print(metadata)
         
         # Ensure rownames of metadata match
-        rownames(metadata) <- metadata$Delivery_name
+        rownames(metadata) <- metadata$sample
         selected_metadata <- metadata[rownames(metadata) %in% selected_names, ]
         
         # Debugging
@@ -613,16 +724,16 @@ server <- function(input, output, session) {
       MDS1 = mds_data$points[,1], 
       MDS2 = mds_data$points[,2], 
       group = colData(global$vsd)[[input$intGroupSelect]],
-      Delivery_name = rownames(colData(global$vsd)) # Add Delivery_name column
+      sample = rownames(colData(global$vsd)) # Add Delivery_name column
     )
-
+    
     global$mds_results <- mds_df
     
     p <- plot_ly(mds_df, x = ~MDS1, y = ~MDS2, color = ~group,
                  type = 'scatter', mode = 'markers',
                  marker = list(size = 10),
-                 customdata = ~Delivery_name,
-                 text = ~paste('Sample:', Delivery_name, '<br>',
+                 customdata = ~sample,
+                 text = ~paste('Sample:', sample, '<br>',
                                'MDS1:', round(MDS1, 2), '<br>',
                                'MDS2:', round(MDS2, 2)),
                  hoverinfo = 'text',
@@ -657,7 +768,7 @@ server <- function(input, output, session) {
         print(selected_mds_data)
         
         # Extract Delivery_name for metadata lookup
-        selected_names <- selected_mds_data$Delivery_name
+        selected_names <- selected_mds_data$sample
         print("Selected Names Data:")
         print(selected_names)
         
@@ -668,7 +779,7 @@ server <- function(input, output, session) {
         print("Metadata Data:")
         print(metadata)
         
-        rownames(metadata) <- metadata$Delivery_name
+        rownames(metadata) <- metadata$sample
         selected_metadata <- metadata[rownames(metadata) %in% selected_names, ]
         
         # Debugging
@@ -701,16 +812,18 @@ server <- function(input, output, session) {
     # global$results is not the data but a logging of the output of it so we cant use that.
     res <- results(global$dds)
     
-    res$gene <- rownames(res)
+    df <- as.data.frame(res)
+    
+    df$gene <- rownames(df)
     
     # Classify genes based on input cutoffs
-    res$Significance <- with(res, ifelse(pvalue < input$pvalue_cutoff & abs(log2FoldChange) > input$fc_cutoff, "Log2FC & pvalue",
-                                       ifelse(pvalue < input$pvalue_cutoff, "pvalue",
-                                              ifelse(abs(log2FoldChange) > input$fc_cutoff, "Log2FC", "Non-significant"))))
+    df$Significance <- with(df, ifelse(pvalue < input$pvalue_cutoff & abs(log2FoldChange) > input$fc_cutoff, "Log2FC & pvalue",
+                                         ifelse(pvalue < input$pvalue_cutoff, "pvalue",
+                                                ifelse(abs(log2FoldChange) > input$fc_cutoff, "Log2FC", "Non-significant"))))
     
     # Separate significant and non-significant points
-    significant_points <- res[res$Significance %in% c("Log2FC & pvalue", "pvalue", "Log2FC"), ]
-    non_significant_points <- res[res$Significance == "Non-significant", ]
+    significant_points <- df[df$Significance %in% c("Log2FC & pvalue", "pvalue", "Log2FC"), ]
+    non_significant_points <- df[!is.na(df$Significance) & df$Significance == "Non-significant", ]
     
     # Downsampling
     if (!input$full_data) {
@@ -719,11 +832,11 @@ server <- function(input, output, session) {
     }
     
     # Combine significant and sampled non-significant points
-    res <- rbind(significant_points, non_significant_points)
+    df <- rbind(significant_points, non_significant_points)
     
-    global$volcano_df <- res
+    global$volcano_df <- df
     
-    p <- plot_ly(data = res, x = ~log2FoldChange, y = ~-log10(pvalue), text = ~paste("Gene:", gene), customdata = ~gene, 
+    p <- plot_ly(data = df, x = ~log2FoldChange, y = ~-log10(pvalue), text = ~paste("Gene:", gene), customdata = ~gene, 
                  color = ~Significance, colors = cb_palette, type = 'scattergl', mode = 'markers',
                  marker = list(size = 5, opacity = 0.7, line = list(width = 0.5, color = 'black')),
                  source = "volcano_plot") %>%
@@ -754,9 +867,9 @@ server <- function(input, output, session) {
       print(selected_genes)
       
       df <- global$volcano_df
-
-      if (all(selected_indices >= 0 & selected_indices < nrow(res))) {
-        selected_volcano_data <- res[selected_genes, ] 
+      
+      if (all(selected_indices >= 0 & selected_indices < nrow(df))) {
+        selected_volcano_data <- df[selected_genes, ] 
         
         # Debugging
         print("Selected Volcano Data:")
@@ -780,7 +893,7 @@ server <- function(input, output, session) {
   
   hcHeatmapPlot2 <- reactive({
     req(global$vsd, input$intGroupSelect)
-
+    
     comparisonGroup <- colData(global$vsd)[[input$intGroupSelect]]
     
     filtered_value <- input$subGroupSelect
@@ -793,7 +906,7 @@ server <- function(input, output, session) {
     # Calculate distance matrix and subset
     dist_matrix_2 <- as.matrix(dist(t(assay(global$vsd))))
     dist_matrix_subset <- dist_matrix_2[selected_rows, selected_rows]
-
+    
     # Create heatmap
     pheatmap(dist_matrix_subset, 
              main = paste(filtered_value), 
@@ -891,7 +1004,7 @@ server <- function(input, output, session) {
     } else {
       append_to_log("Could not load DDS object.")
     }
-
+    
   })
   
   observe({
@@ -905,6 +1018,14 @@ server <- function(input, output, session) {
                       choices = comparisonGroups)
   })
   
+  observe({
+    req(samplesheet())
+    
+    comparisonGroups <- colnames(samplesheet())
+    
+    updateSelectInput(session, "design_input", choices = comparisonGroups)
+  })
+  
   subgroups <- reactive({
     req(input$intGroupSelect, global$dds)
     
@@ -914,12 +1035,57 @@ server <- function(input, output, session) {
   
   observe({
     req(subgroups())
-  
+    
     uniqueSubgroups <- unique(subgroups())
     
     updateSelectInput(session, "subGroupSelect", 
                       choices = uniqueSubgroups)
   })
+  
+  ## observe annotations to update excludable values
+  observe({
+    req(global$metadata_new, global$counts_data)
+    
+    updateCheckboxGroupInput(session, "excluded_values", choices=global$metadata_new$sample)
+  })
+  
+  
+  
+  observeEvent(input$exclude, {
+    counts_new <- read_table(global$counts_data$datapath)
+    metadata_new <- global$metadata_new
+    rownames(metadata_new) <- metadata_new$sample
+    View(counts_new)
+    View(metadata_new)
+    
+    # Exclude selected rows and columns
+    excluded_samples <- input$excluded_values
+    print("Excluded Samples:")
+    print(excluded_samples)
+    print("Column Names Before Exclusion:")
+    print(colnames(counts_new))
+    print("Row Names Before Exclusion:")
+    print(rownames(metadata_new))
+    
+    counts_new <- counts_new[, !(colnames(counts_new) %in% excluded_samples)]
+    metadata_new <- metadata_new[!(rownames(metadata_new) %in% excluded_samples), ]
+    
+    print("Column Names After Exclusion:")
+    print(colnames(counts_new))
+    print("Row Names After Exclusion:")
+    print(rownames(metadata_new))
+    
+    global$counts_data <- counts_new
+    global$metadata_new <- metadata_new
+    View(global$counts_data)
+    View(global$metadata_new)
+  })
+  
+  observeEvent(input$counts_input, {
+    if (file.exists(input$counts_input$datapath)) {
+      global$counts_filepath <- input$counts_input$datapath 
+      global$counts_data <- input$counts_input
+    }
+  })
 }
 shinyApp(ui, server)
-
