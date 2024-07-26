@@ -172,6 +172,7 @@ server <- function(input, output, session) {
   # Where to store the directories
   
   global <- reactiveValues(
+    alreadyExcluded = F,
     madeDds = F, 
     doAutoDDS = T,
     samples_dir = NULL, 
@@ -256,15 +257,17 @@ server <- function(input, output, session) {
     counts <- global$counts_data
     
     # Check for duplicates in gene names
-    if (any(duplicated(counts$gene_name))) {
-      append_to_log("Duplicate gene names found. Using Ensembl IDs as row indices.")
-      counts <- counts %>% 
-        select(-gene_name) %>%
-        column_to_rownames("gene_id")
-    } else {
-      counts <- counts %>% 
-        select(-gene_id) %>%
-        column_to_rownames("gene_name")
+    if (!is.null(counts$gene_name) && !is.null(counts$gene_id)) {
+      if (any(duplicated(counts$gene_name))) {
+        append_to_log("Duplicate gene names found. Using Ensembl IDs as row indices.")
+        counts <- counts %>% 
+          select(-gene_name) %>%
+          column_to_rownames("gene_id")
+      } else {
+        counts <- counts %>% 
+          select(-gene_id) %>%
+          column_to_rownames("gene_name")
+      }
     }
     
     
@@ -304,15 +307,17 @@ server <- function(input, output, session) {
       counts <- read_tsv(global$counts_filepath)
       
       # Check for duplicates in gene names
-      if (any(duplicated(counts$gene_name))) {
-        append_to_log("Duplicate gene names found. Using Ensembl IDs as row indices.")
-        counts <- counts %>% 
-          select(-gene_name) %>%
-          column_to_rownames("gene_id")
-      } else {
-        counts <- counts %>% 
-          select(-gene_id) %>%
-          column_to_rownames("gene_name")
+      if (!is.null(counts$gene_name) && !is.null(counts$gene_id)) {
+        if (any(duplicated(counts$gene_name))) {
+          append_to_log("Duplicate gene names found. Using Ensembl IDs as row indices.")
+          counts <- counts %>% 
+            select(-gene_name) %>%
+            column_to_rownames("gene_id")
+        } else {
+          counts <- counts %>% 
+            select(-gene_id) %>%
+            column_to_rownames("gene_name")
+        }
       }
       
       counts <- counts %>% 
@@ -332,15 +337,17 @@ server <- function(input, output, session) {
     } else if (isFALSE(global$doAutoDds) && is.null(global$counts_data)) {
       showModal(modalDialog("Count data found, loading count preview and count data, not performing DESeq2. Please wait if the program freezes as this may take a while."))
       counts <- read_tsv(global$counts_filepath)
-      if (any(duplicated(counts$gene_name))) {
-        append_to_log("Duplicate gene names found. Using Ensembl IDs as row indices.")
-        counts <- counts %>% 
-          select(-gene_name) %>%
-          column_to_rownames("gene_id")
-      } else {
-        counts <- counts %>% 
-          select(-gene_id) %>%
-          column_to_rownames("gene_name")
+      if (!is.null(counts$gene_name) && !is.null(counts$gene_id)) {
+        if (any(duplicated(counts$gene_name))) {
+          append_to_log("Duplicate gene names found. Using Ensembl IDs as row indices.")
+          counts <- counts %>% 
+            select(-gene_name) %>%
+            column_to_rownames("gene_id")
+        } else {
+          counts <- counts %>% 
+            select(-gene_id) %>%
+            column_to_rownames("gene_name")
+        }
       }
       
       counts <- counts %>% 
@@ -449,9 +456,11 @@ server <- function(input, output, session) {
   })
   
   output$count_data_pre <- renderDataTable({
-    if (!is.null(global$counts_data) && file.exists(global$counts_filepath)) {
+    if (!is.null(global$counts_data) && file.exists(global$counts_filepath) && !is.null(input$counts_input)) {
       read_tsv(global$counts_data$datapath)
-    } else {
+    } else if (!is.null(global$counts_data) && file.exists(global$counts_filepath)) {
+        global$counts_data
+      } else {
       data.frame("N/A")
     }
   })
@@ -683,6 +692,8 @@ server <- function(input, output, session) {
         # Ensure rownames of metadata match
         rownames(metadata) <- metadata$sample
         selected_metadata <- metadata[rownames(metadata) %in% selected_names, ]
+        selected_metadata$PC1 <- selected_pca_data$PC1
+        selected_metadata$PC2 <- selected_pca_data$PC2
         
         # Debugging
         print("Selected Metadata:")
@@ -709,7 +720,7 @@ server <- function(input, output, session) {
   output$cooksPlot <- renderPlot({
     req(global$dds)
     # Plot config.
-    par(mar=c(5,5,1,1))
+    par(mar=c(12,5,1,1))
     # Plot cooks distances.
     boxplot(log10(assays(global$dds)[["cooks"]]), range=0, las=2)
   }, width = plotWidth, height = plotHeight)
@@ -781,6 +792,8 @@ server <- function(input, output, session) {
         
         rownames(metadata) <- metadata$sample
         selected_metadata <- metadata[rownames(metadata) %in% selected_names, ]
+        selected_metadata$MDS1 <- selected_mds_data$MDS1
+        selected_metadata$MDS2 <- selected_mds_data$MDS2
         
         # Debugging
         print("Selected Metadata:")
@@ -1052,33 +1065,69 @@ server <- function(input, output, session) {
   
   
   observeEvent(input$exclude, {
-    counts_new <- read_table(global$counts_data$datapath)
-    metadata_new <- global$metadata_new
-    rownames(metadata_new) <- metadata_new$sample
-    View(counts_new)
-    View(metadata_new)
-    
-    # Exclude selected rows and columns
-    excluded_samples <- input$excluded_values
-    print("Excluded Samples:")
-    print(excluded_samples)
-    print("Column Names Before Exclusion:")
-    print(colnames(counts_new))
-    print("Row Names Before Exclusion:")
-    print(rownames(metadata_new))
-    
-    counts_new <- counts_new[, !(colnames(counts_new) %in% excluded_samples)]
-    metadata_new <- metadata_new[!(rownames(metadata_new) %in% excluded_samples), ]
-    
-    print("Column Names After Exclusion:")
-    print(colnames(counts_new))
-    print("Row Names After Exclusion:")
-    print(rownames(metadata_new))
-    
-    global$counts_data <- counts_new
-    global$metadata_new <- metadata_new
-    View(global$counts_data)
-    View(global$metadata_new)
+    req(global$counts_data, global$metadata_new)
+    if (isFALSE(global$alreadyExcluded)) {
+      if (!is.null(global$counts_data) && file.exists(global$counts_filepath) && !is.null(input$counts_input)) {
+        counts_new <- read_tsv(global$counts_data$datapath)
+      } else if (!is.null(global$counts_data) && file.exists(global$counts_filepath)) {
+        counts_new <- global$counts_data
+      }
+      metadata_new <- global$metadata_new
+      rownames(metadata_new) <- metadata_new$sample
+      View(counts_new)
+      View(metadata_new)
+      
+      # Exclude selected rows and columns
+      excluded_samples <- input$excluded_values
+      print("Excluded Samples:")
+      print(excluded_samples)
+      print("Column Names Before Exclusion:")
+      print(colnames(counts_new))
+      print("Row Names Before Exclusion:")
+      print(rownames(metadata_new))
+      
+      counts_new <- counts_new[, !(colnames(counts_new) %in% excluded_samples)]
+      metadata_new <- metadata_new[!(rownames(metadata_new) %in% excluded_samples), ]
+      
+      print("Column Names After Exclusion:")
+      print(colnames(counts_new))
+      print("Row Names After Exclusion:")
+      print(rownames(metadata_new))
+      
+      global$counts_data <- counts_new
+      global$metadata_new <- metadata_new
+      View(global$counts_data)
+      View(global$metadata_new)
+      global$alreadyExcluded <- T
+    } else {
+      counts_new <- global$counts_data
+      metadata_new <- global$metadata_new
+      rownames(metadata_new) <- metadata_new$sample
+      View(counts_new)
+      View(metadata_new)
+      
+      # Exclude selected rows and columns
+      excluded_samples <- input$excluded_values
+      print("Excluded Samples:")
+      print(excluded_samples)
+      print("Column Names Before Exclusion:")
+      print(colnames(counts_new))
+      print("Row Names Before Exclusion:")
+      print(rownames(metadata_new))
+      
+      counts_new <- counts_new[, !(colnames(counts_new) %in% excluded_samples)]
+      metadata_new <- metadata_new[!(rownames(metadata_new) %in% excluded_samples), ]
+      
+      print("Column Names After Exclusion:")
+      print(colnames(counts_new))
+      print("Row Names After Exclusion:")
+      print(rownames(metadata_new))
+      
+      global$counts_data <- counts_new
+      global$metadata_new <- metadata_new
+      View(global$counts_data)
+      View(global$metadata_new)
+    }
   })
   
   observeEvent(input$counts_input, {
